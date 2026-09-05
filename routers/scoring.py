@@ -35,6 +35,34 @@ def deflate(score: int) -> int:
 def pte_estimate(raw: int) -> str:
     return f"{round(raw * 1.05)}-{round(raw * 1.18)}"
 
+# Tier 2 — audio-grounded content guard.
+# Whisper has a strong prior to "complete" a half-spoken verbatim task (Read
+# Aloud / Repeat Sentence) into the full reference, producing a transcript that
+# word-matches perfectly and inflates content. The waveform knows how much
+# speech actually happened: pretend_words_from_audio() bounds the number of
+# reference words the voiced seconds could physically fit, and the content cap
+# follows from that fraction.
+MAX_VERBATIM_WPS = 4.5  # ~270 wpm ceiling — generous enough to never punish a
+                        # genuine full-speed read, tight enough that a half-length
+                        # recording can never credit the complete sentence.
+
+def audio_plausible_fraction(voiced_s: float, reference_words: int) -> float:
+    """Fraction of the reference a recording could physically cover, given the
+    voiced speech time. Clamped to [0,1]. Pure + deterministic (unit tested)."""
+    if voiced_s is None or reference_words is None or reference_words <= 0:
+        return 0.0
+    v = max(0.0, float(voiced_s))
+    if v <= 0:
+        return 0.0
+    return min(1.0, (v * MAX_VERBATIM_WPS) / float(reference_words))
+
+def audio_content_cap(voiced_s: float, reference_words: int) -> int:
+    """0..90 content ceiling from the audio, or -1 when there is no audio."""
+    frac = audio_plausible_fraction(voiced_s, reference_words)
+    if frac <= 0:
+        return -1
+    return min(90, round(frac * 90))
+
 # --- Writing ---
 class WritingRequest(BaseModel):
     attempt_id: Optional[int] = None
@@ -543,6 +571,31 @@ async def score_speaking(
                         result["phoneme_pronunciation"] = ph
             except Exception as e:
                 logger.warning("phoneme pronunciation failed: %s", e)
+
+            # Tier 2 — audio-grounded content guard. Whisper has a strong prior to
+            # "complete" a half-spoken Read Aloud / Repeat Sentence into the full
+            # reference, which inflates content (a perfect word match on a
+            # hallucinated full transcript). The waveform knows how much speech
+            # really happened: if the voiced seconds cannot physically fit the
+            # claimed words, the transcript over-claims and content must be capped
+            # to what the audio plausibly contained.
+            if task in ("repeat_sentence", "read_aloud"):
+                try:
+                    ref_n = len([w for w in (reference_text or "").split() if w.strip()])
+                    voiced_s = float(audio_feats.get("voiced_s") or 0.0)
+                    cap = audio_content_cap(voiced_s, ref_n)
+                    if cap >= 0:
+                        cur = float(result.get("content") or 0)
+                        if cap < cur:
+                            result["content"] = cap
+                            result["audio_content_cap"] = cap
+                            result["audio_claim"] = {
+                                "voiced_s": round(voiced_s, 2),
+                                "reference_words": ref_n,
+                                "max_supportable_words": round(voiced_s * MAX_VERBATIM_WPS, 1),
+                            }
+                except Exception as e:
+                    logger.warning("audio content guard failed: %s", e)
 
         raw = float(result.get("score") or 0)
         if raw <= 0:
