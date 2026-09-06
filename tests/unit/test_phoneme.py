@@ -69,6 +69,25 @@ class PhonemeTest(unittest.TestCase):
     def test_aligner_available_is_bool(self):
         self.assertIn(aligner_available(), (True, False))
 
+    def test_pron90_maps_linearly_from_word_scores(self):
+        # Contract: "60% correct pronunciation" must score ~54, "100%" ~90 —
+        # the aggregation is a straight proportion, not a template.
+        import importlib
+        svc = importlib.import_module("services.phoneme")
+        original = svc.word_pronunciation_score
+        sig = make_voiced_signal(16000, 0.6)
+        ts = [{"word": "w%d" % i, "start": i * 0.2, "end": (i + 1) * 0.2} for i in range(5)]
+
+        svc.word_pronunciation_score = lambda *a, **k: {"score01": 0.6, "reason": ""}
+        res = phoneme_pronunciation(sig, 16000, ts)
+        svc.word_pronunciation_score = original
+        self.assertEqual(res["pron90"], 54)
+
+        svc.word_pronunciation_score = lambda *a, **k: {"score01": 1.0, "reason": ""}
+        res = phoneme_pronunciation(sig, 16000, ts)
+        svc.word_pronunciation_score = original
+        self.assertEqual(res["pron90"], 90)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

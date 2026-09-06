@@ -482,9 +482,15 @@ async def score_speaking(
             raise HTTPException(status_code=503, detail="AI feedback unavailable")
         try:
             transcript = groq_transcribe(audio_bytes, audio_mime)
-            # attach the real transcript so speech-rate can use the true word count
+            # Recompute the waveform speech rate from the REAL transcript word
+            # count (analyze() ran before transcription, so its rate was 0).
             if audio_feats:
-                audio_feats["words"] = len([w for w in transcript.split() if w.strip()])
+                _words = len([w for w in transcript.split() if w.strip()])
+                _voiced = float(audio_feats.get("voiced_s") or 0.0)
+                _sps = _words / _voiced if _voiced > 0 else 0.0
+                audio_feats["words"] = _words
+                audio_feats["speech_rate_sps"] = round(_sps, 3)
+                audio_feats["speech_rate_wpm"] = round(_sps * 60.0, 1)
             system = (
                 "You are a senior PTE Academic speaking examiner. Score the "
                 "student's TRANSCRIPT strictly like the real test for the given "
@@ -513,10 +519,12 @@ async def score_speaking(
             logger.error("Groq speaking upload path failed: %s", e)
             raise HTTPException(status_code=503, detail="AI feedback unavailable")
 
-        # Tier 1 blending — intersect the LLM scores with the WAVEFORM facts.
-        # The LLM sees words; the audio tells the truth about delivery. When the
-        # waveform says fluency/pronunciation are weak, cap the scored values so
-        # a fluent-looking transcript cannot mask a disfluent, flat recording.
+        # Tier 1 blending — the SOUND is the authority, the LLM only nudges.
+        # The LLM sees words; the audio tells the truth about delivery. Fluency
+        # (rate, pauses, dead-air) and pronunciation (intonation, phonemes) are
+        # mapped continuously 0..90 from the measured waveform, so a slow read
+        # scores low fluency, a rushed read is penalised, and a flat recording
+        # scores low pronunciation — proportionally, not by a fixed cap.
         if audio_feats.get("available"):
             fl = audio_analysis.fluency_from_features(audio_feats)
             pr = audio_analysis.pronunciation_from_features(audio_feats)
@@ -524,11 +532,19 @@ async def score_speaking(
             pr_rate = pr.get("pron01", 0.0)
             cur_fl = deflate(float(result.get("fluency") or 0))
             cur_pr = deflate(float(result.get("pronunciation") or 0))
-            # waveform-capped: audio bad -> score can't stay high
-            capped_fl = min(cur_fl, round(max(20.0, fl_rate * 88)))
-            capped_pr = min(cur_pr, round(max(20.0, pr_rate * 88)))
-            result["fluency"] = capped_fl
-            result["pronunciation"] = capped_pr
+            voiced_s = float(audio_feats.get("voiced_s") or 0.0)
+            if voiced_s > 0.5:
+                # enough real speech: audio wins, LLM nudge smooths recognition
+                # noise. Natural delivery -> fl_rate~1 -> ~90; slow -> ~0.5-0.78
+                # of that; rushed -> penalty; flat pitch -> low pronunciation.
+                audio_fl = round(fl_rate * 90)
+                audio_pr = round(pr_rate * 90)
+                result["fluency"] = round(0.75 * audio_fl + 0.25 * min(90, cur_fl))
+                result["pronunciation"] = round(0.65 * audio_pr + 0.35 * min(90, cur_pr))
+            else:
+                # too little voice to trust the waveform — LLM leads, caps only
+                result["fluency"] = min(cur_fl, round(max(20.0, fl_rate * 88)))
+                result["pronunciation"] = min(cur_pr, round(max(20.0, pr_rate * 88)))
             if fl.get("reasons"):
                 result.setdefault("errors", []).extend(fl["reasons"][:3])
             if pr.get("reasons"):
@@ -537,6 +553,8 @@ async def score_speaking(
             result["audio_features"] = audio_feats
             result["audio_fluency"] = fl
             result["audio_pronunciation"] = pr
+            result["audio_fluency90"] = round(fl_rate * 90)
+            result["audio_pronunciation90"] = round(pr_rate * 90)
 
             # Tier 1b — phoneme-level pronunciation. Decode the PCM once and
             # score each transcript word from its own acoustic window (voicing,
@@ -564,9 +582,10 @@ async def score_speaking(
                             for i in range(len(words))
                         ]
                     ph = phoneme_svc.phoneme_pronunciation(pcm_sig, pcm_rate, timestamps)
-                    if ph["pron90"] > 10:
-                        # authoritative pron: phoneme estimate overrides the
-                        # coarse pitch-only heuristic when it has real words.
+                    if ph.get("words", 0) > 0:
+                        # authoritative pron: the per-word acoustic/phoneme
+                        # estimate overrides the coarse heuristic whenever real
+                        # words were aligned — low AND high values both count.
                         result["pronunciation"] = ph["pron90"]
                         result["phoneme_pronunciation"] = ph
             except Exception as e:

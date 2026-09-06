@@ -58,6 +58,46 @@ class AudioAnalysisUnitTest(unittest.TestCase):
         f = fluency_from_features(audio)
         self.assertLess(f["fluency01"], 1.0)
 
+    def test_natural_rate_keeps_full_fluency(self):
+        # the "good" band (2.0-4.5 words/s, no pauses) must map to the top,
+        # so a genuinely smooth read scores high — not a capped 20-50.
+        audio = empty_audio()
+        audio["available"] = True
+        audio["pauses"] = []
+        audio["speech_rate_sps"] = 3.0
+        audio["voicing_ratio"] = 0.8
+        f = fluency_from_features(audio)
+        self.assertEqual(f["fluency01"], 1.0)
+
+    def test_very_fast_rate_penalises_fluency(self):
+        audio = empty_audio()
+        audio["available"] = True
+        audio["pauses"] = []
+        audio["speech_rate_sps"] = 7.0         # too fast — words cut/merged
+        audio["voicing_ratio"] = 0.8
+        f = fluency_from_features(audio)
+        self.assertLessEqual(f["fluency01"], 0.65)
+        self.assertGreaterEqual(f["fluency01"], 0.60)
+        self.assertTrue(any("too fast" in r for r in f["reasons"]))
+
+    def test_rushed_rate_penalises_fluency(self):
+        audio = empty_audio()
+        audio["available"] = True
+        audio["pauses"] = []
+        audio["speech_rate_sps"] = 6.0         # rushed
+        audio["voicing_ratio"] = 0.8
+        f = fluency_from_features(audio)
+        self.assertLessEqual(f["fluency01"], 0.80)
+
+    def test_fast_rate_penalises_pronunciation_heuristic(self):
+        audio = empty_audio()
+        audio["available"] = True
+        audio["speech_rate_sps"] = 6.0         # rushed delivery
+        audio["f0_semitone_sd"] = 1.5
+        audio["clipping_ratio"] = 0.0
+        p = pronunciation_from_features(audio)
+        self.assertLessEqual(p["pron01"], 0.85)
+
     def test_flat_intonation_penalises_pronunciation(self):
         audio = empty_audio()
         audio["available"] = True

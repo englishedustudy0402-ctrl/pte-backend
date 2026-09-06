@@ -306,16 +306,26 @@ def fluency_from_features(audio: dict) -> dict:
     score = 1.0
     reasons = []
 
-    # Natural speaking rate ~ 2.2-4.5 syllables/s (~ 132-270 wpm at 60 wpmin).
-    if 0 < sps < 1.4:
+    # Natural speaking rate ~ 2.0-4.5 words/s (~ 120-270 wpm). Both tails are
+    # penalised continuously: too slow drags fluency down, too fast means words
+    # are being cut/merged, which costs marks exactly like a rushed PTE read.
+    if sps <= 0:
+        reasons.append("unmeasurable speech rate")
+    elif sps < 1.4:
         score *= 0.55
-        reasons.append(f"very slow delivery ({sps:.1f} syl/s)")
-    elif 0 < sps < 2.0:
+        reasons.append(f"very slow delivery ({sps:.1f} words/s)")
+    elif sps < 2.0:
         score *= 0.78
-        reasons.append(f"slow delivery ({sps:.1f} syl/s)")
+        reasons.append(f"slow delivery ({sps:.1f} words/s)")
+    elif sps > 6.5:
+        score *= 0.65
+        reasons.append(f"too fast — words cut/merged ({sps:.1f} words/s)")
     elif sps > 5.5:
         score *= 0.80
-        reasons.append(f"very fast, possibly rushed ({sps:.1f} syl/s)")
+        reasons.append(f"very fast, rushed ({sps:.1f} words/s)")
+    elif sps > 4.5:
+        score *= 0.90
+        reasons.append(f"fast delivery ({sps:.1f} words/s)")
 
     # Pauses: heavy penalty per pause > 3 s (PTE band descriptor).
     penalty = 0.0
@@ -352,6 +362,13 @@ def pronunciation_from_features(audio: dict) -> dict:
 
     score = 1.0
     reasons = []
+
+    # rushing compresses articulation — the waveform's per-word quality measure
+    # (phoneme tier) already catches it per word, so mirror it in the heuristic.
+    sps = float(audio.get("speech_rate_sps") or 0.0)
+    if sps > 5.5:
+        score *= 0.85
+        reasons.append("rushed delivery — sounds compressed")
 
     st = float(audio.get("f0_semitone_sd") or 0.0)
     if st and st >= 0.01:
