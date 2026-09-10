@@ -105,12 +105,20 @@ async def require_active_plan(profile=Depends(require_authenticated)):
     raise HTTPException(status_code=402, detail="Subscription required or trial expired")
 
 
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "engledgedustudy0402@gmail.com")
+
 def require_role(*roles: str):
-    """Dependency factory: enforce application roles (e.g. 'admin')."""
+    """Dependency factory: enforce application roles (e.g. 'admin'). Admin
+    access is additionally locked to ADMIN_EMAIL so only that one account can
+    manage approvals, regardless of the role flag on other profiles."""
     async def _check(profile=Depends(require_authenticated)):
         role = profile.get("role") or "member"
         if role not in roles:
             raise HTTPException(status_code=403, detail="Insufficient permissions")
+        if "admin" in roles:
+            email = (profile.get("email") or "").strip().lower()
+            if email != ADMIN_EMAIL.strip().lower():
+                raise HTTPException(status_code=403, detail="Insufficient permissions")
         return profile
     return _check
 
