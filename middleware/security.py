@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, Request
+﻿from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client
 from functools import lru_cache
@@ -105,7 +105,7 @@ async def require_active_plan(profile=Depends(require_authenticated)):
     raise HTTPException(status_code=402, detail="Subscription required or trial expired")
 
 
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "engledgedustudy0402@gmail.com")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "englishedustudy0402@gmail.com")
 
 def require_role(*roles: str):
     """Dependency factory: enforce application roles (e.g. 'admin'). Admin
