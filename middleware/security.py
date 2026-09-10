@@ -55,9 +55,14 @@ def _is_trial_active(profile) -> bool:
 
 
 async def require_authenticated(profile=Depends(get_profile)):
-    """Any signed-in, non-banned user (free, trial, or pro)."""
+    """Any signed-in, non-banned, admin-approved user. Accounts that are still
+    pending (or were rejected) are blocked from ALL practice-facing endpoints
+    until an admin approves them."""
     if profile.get("is_banned"):
         raise HTTPException(status_code=403, detail="Account suspended")
+    status = profile.get("approval_status")
+    if status is not None and status != "approved":
+        raise HTTPException(status_code=403, detail="Account pending admin approval")
     return profile
 
 

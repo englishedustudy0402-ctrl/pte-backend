@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from slowapi.errors import RateLimitExceeded
 from middleware.security import limiter
-from routers import auth, questions, sessions, scoring, generator, anthropic, recordings, attempts, analytics
+from routers import auth, questions, sessions, scoring, generator, anthropic, recordings, attempts, analytics, admin
 
 # --- Structured logging ---------------------------------------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -86,6 +86,7 @@ app.include_router(scoring.router, prefix="/score", tags=["scoring"])
 app.include_router(generator.router, prefix="/generator", tags=["generator"])
 app.include_router(anthropic.router, prefix="/anthropic", tags=["anthropic"])
 app.include_router(recordings.router, prefix="/recordings", tags=["recordings"])
+app.include_router(admin.router, tags=["admin"])
 
 @app.get("/health")
 async def health():

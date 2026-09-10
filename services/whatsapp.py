@@ -20,8 +20,11 @@ reports "not configured" and callers fall back to the on-screen demo code.
   WHATSAPP_DEFAULT_COUNTRY_CODE  used when the recipient has no country code
 
   --- Twilio (fastest to try) ---
-  TWILIO_ACCOUNT_SID           from twilio.com console
-  TWILIO_AUTH_TOKEN            from twilio.com console
+  TWILIO_ACCOUNT_SID           from twilio.com console (starts AC...)
+  TWILIO_AUTH_TOKEN            from twilio.com console (classic auth)
+  TWILIO_API_KEY               optional API key SID (starts SK...) — used for
+                               Basic auth when TWILIO_AUTH_TOKEN is absent
+  TWILIO_API_KEY_SECRET        the secret paired with TWILIO_API_KEY
   TWILIO_WHATSAPP_FROM         WhatsApp sandbox/active number, e.g. 14155238886
                                (digits only, no +)
 
@@ -56,10 +59,20 @@ def _meta_config():
 def _twilio_config():
     sid = os.getenv("TWILIO_ACCOUNT_SID", "")
     token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    api_key = os.getenv("TWILIO_API_KEY", "")
+    api_secret = os.getenv("TWILIO_API_KEY_SECRET", "")
     sender = os.getenv("TWILIO_WHATSAPP_FROM", "")
-    if _placeholder(sid) or _placeholder(token) or _placeholder(sender):
+    if _placeholder(sid) or _placeholder(sender):
         return None
-    return {"sid": sid.strip(), "token": token.strip(), "from": sender.strip()}
+    if _placeholder(api_key) and _placeholder(api_secret) and _placeholder(token):
+        return None
+    return {
+        "sid": sid.strip(),
+        "token": token.strip(),
+        "api_key": api_key.strip(),
+        "api_secret": api_secret.strip(),
+        "from": sender.strip(),
+    }
 
 def _msg91_config():
     authkey = os.getenv("MSG91_AUTHKEY", "")
@@ -201,7 +214,12 @@ def _send_twilio(twilio: dict, to: str, code: str) -> dict:
         "To": f"whatsapp:{to}",
         "Body": body,
     }).encode("utf-8")
-    auth = base64.b64encode(f"{twilio['sid']}:{twilio['token']}".encode("utf-8")).decode("ascii")
+    # Authenticate with an API key (SK... + secret) when one is configured,
+    # otherwise fall back to the classic Account SID + Auth Token. The URL path
+    # always uses the Account SID.
+    user = twilio.get("api_key") or twilio["sid"]
+    pwd = twilio.get("api_secret") or twilio.get("token") or ""
+    auth = base64.b64encode(f"{user}:{pwd}".encode("utf-8")).decode("ascii")
     req = urllib.request.Request(
         f"{TWILIO_BASE}/{twilio['sid']}/Messages.json",
         data=form,
