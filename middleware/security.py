@@ -89,19 +89,78 @@ async def optional_profile(request: Request) -> dict | None:
     return None
 
 
-async def require_active_plan(profile=Depends(require_authenticated)):
-    """Any trial-or-pro user with a live entitlement."""
-    plan = profile.get("plan")
-    if plan == "pro":
-        return profile
+# Supported exams. Each maps to a per-exam expiry column on profiles, so a
+# single payment unlocks exactly ONE exam (the product is "1 payment = 1 exam").
+EXAMS = {
+    "pte": "pte_expires_at",
+    "ielts": "ielts_expires_at",
+    "det": "det_expires_at",
+}
 
-    if plan == "trial":
-        if _is_trial_active(profile):
+def _parse_dt(value):
+    from dateutil import parser
+    if isinstance(value, str):
+        value = parser.parse(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def has_exam_access(profile, exam: str) -> bool:
+    """Whether the profile currently holds live access to a specific exam.
+
+    Admin always passes (owns the platform). An active trial previews all
+    exams. Paid access is per-exam via {exam}_expires_at on profiles.
+    """
+    if (profile.get("email") or "").strip().lower() == ADMIN_EMAIL.strip().lower():
+        return True
+    if profile.get("is_banned"):
+        return False
+    plan = profile.get("plan")
+    if plan == "trial" and _is_trial_active(profile):
+        return True
+    col = EXAMS.get(str(exam).lower())
+    if not col:
+        return False
+    exp = profile.get(col)
+    if not exp:
+        return False
+    try:
+        return _parse_dt(exp) > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
+def require_exam_access(exam: str):
+    """Dependency factory: enforce live access to ONE exam (e.g. 'pte')."""
+    async def _check(profile=Depends(require_authenticated)):
+        if not has_exam_access(profile, exam):
+            col = EXAMS.get(str(exam).lower())
+            hint = f"{exam.upper()} subscription required or expired"
+            if col and profile.get(col):
+                # Persist the downgrade so the client can't replay past expiry.
+                supabase = get_supabase()
+                supabase.table("profiles").update({"plan": "free"}).eq("id", profile["id"]).execute()
+            raise HTTPException(status_code=402, detail=hint)
+        return profile
+    return _check
+
+
+async def require_active_plan(profile=Depends(require_authenticated)):
+    """Legacy all-exams gate: any active trial or pro entitlement. New code
+    should prefer require_exam_access(exam) so a purchase maps to one exam;
+    kept for trial-wide endpoints until they are exam-scoped."""
+    for exam in EXAMS:
+        if has_exam_access(profile, exam):
             return profile
+    if profile.get("plan") == "trial" and _is_trial_active(profile):
+        return profile
+    if profile.get("plan") == "pro":
+        return profile
+    if profile.get("plan") == "trial":
         # Trial expired: persist the downgrade so the client can't replay it.
         supabase = get_supabase()
         supabase.table("profiles").update({"plan": "free"}).eq("id", profile["id"]).execute()
-
     raise HTTPException(status_code=402, detail="Subscription required or trial expired")
 
 

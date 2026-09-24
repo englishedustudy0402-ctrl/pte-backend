@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from middleware.security import require_active_plan, require_authenticated, get_supabase
+from middleware.security import require_exam_access, require_authenticated, get_supabase, has_exam_access
 from typing import Optional, Literal
 import json
 import random
@@ -42,24 +42,25 @@ PREMIUM_TIER = "premium"
 FREE_TIER = "free"
 
 
-def _tier_for(profile) -> str:
-    return PREMIUM_TIER if profile.get("plan") == "pro" else FREE_TIER
+def _tier_for(profile, exam: str) -> str:
+    return PREMIUM_TIER if has_exam_access(profile, exam) else FREE_TIER
 
 
-def _visible_tiers(profile) -> list:
-    """Tiers this user may read. Non-pro users get the free subset only."""
-    return [PREMIUM_TIER, FREE_TIER] if _tier_for(profile) == PREMIUM_TIER else [FREE_TIER]
+def _visible_tiers(profile, exam: str) -> list:
+    """Tiers this user may read. Users without exam access get the free subset only."""
+    return [PREMIUM_TIER, FREE_TIER] if _tier_for(profile, exam) == PREMIUM_TIER else [FREE_TIER]
 
 
-def _base_query(profile):
-    """Shared question selector: active + published + tier-gated."""
+def _base_query(profile, exam: str = "pte"):
+    """Shared question selector: active + published + tier-gated for one exam."""
     return (
         get_supabase()
         .table("questions")
         .select("*")
         .eq("is_active", True)
         .eq("status", "published")
-        .in_("tier", _visible_tiers(profile))
+        .eq("exam", exam)
+        .in_("tier", _visible_tiers(profile, exam))
     )
 
 
@@ -77,7 +78,7 @@ def _apply_scope(query, section, task, exam, difficulty):
 
 def _scoped(profile, section, task, exam, difficulty):
     """Fresh tier-gated + scoped chain (never reuse a builder after execute)."""
-    return _apply_scope(_base_query(profile), section, task, exam, difficulty)
+    return _apply_scope(_base_query(profile, exam or "pte"), section, task, exam or "pte", difficulty)
 
 
 @router.get("/")
@@ -114,7 +115,7 @@ async def next_question(
     history: Optional[str] = None,
     mode: Optional[Literal["practice", "mock"]] = Query(default="practice"),
     index: int = Query(default=1, ge=1, le=500),
-    profile=Depends(require_active_plan),
+    profile=Depends(require_exam_access("pte")),
 ):
     """Single-question delivery. `index` is the deterministic question_key that
     mirrors the offline bank id. In `mock` mode `index` is ignored and a random
@@ -161,7 +162,7 @@ async def get_random_question(
     task: Optional[str] = None,
     exam: Optional[str] = None,
     difficulty: Optional[Literal["easy", "medium", "hard"]] = None,
-    profile=Depends(require_active_plan),
+    profile=Depends(require_exam_access("pte")),
 ):
     """Single random question, tier-gated (premium bank only for pro)."""
     db_section = section.lower()
@@ -221,7 +222,7 @@ async def get_question(
     question_id: str,
     section: Optional[str] = None,
     task: Optional[str] = None,
-    profile=Depends(require_active_plan),
+    profile=Depends(require_exam_access("pte")),
 ):
     """Single question by DB uuid or by offline address (section, task, index)."""
     supabase = get_supabase()

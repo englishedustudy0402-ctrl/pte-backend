@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+﻿from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Literal
-from middleware.security import require_active_plan, require_authenticated, get_supabase
+from middleware.security import require_exam_access, require_authenticated, get_supabase
 from routers.sessions import _resolve_question
 from services import scoring_engine
 from services.scoring_engine import grade, persist
@@ -29,9 +29,9 @@ class SubmitAttemptRequest(BaseModel):
 
 
 @router.post("/")
-async def create_attempt(body: CreateAttemptRequest, profile=Depends(require_active_plan)):
+async def create_attempt(body: CreateAttemptRequest, profile=Depends(require_exam_access("pte"))):
     """Create an attempt owned by the authenticated user. The body never
-    carries a user_id — ownership always comes from the JWT."""
+    carries a user_id â€” ownership always comes from the JWT."""
     supabase = get_supabase()
     question, err = _resolve_question(supabase, body, profile)
     if err == 422:
@@ -110,7 +110,7 @@ async def get_attempt(attempt_id: str, profile=Depends(require_authenticated)):
 
 
 @router.post("/{attempt_id}/submit")
-async def submit_attempt(attempt_id: str, body: SubmitAttemptRequest, profile=Depends(require_active_plan)):
+async def submit_attempt(attempt_id: str, body: SubmitAttemptRequest, profile=Depends(require_exam_access("pte"))):
     """Submit + canonical deterministic scoring. Duplicate submission -> 409."""
     supabase = get_supabase()
     res = (

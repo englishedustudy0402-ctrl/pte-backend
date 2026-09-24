@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
-from middleware.security import get_current_user, require_active_plan, log_audit, get_client_ip, get_supabase
+﻿from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from middleware.security import get_current_user, require_exam_access, log_audit, get_client_ip, get_supabase
 from routers.questions import SECTION_MAP, _visible_tiers
 from datetime import datetime, timezone
 from pydantic import BaseModel
@@ -31,7 +31,8 @@ def _resolve_question(supabase, body, profile):
         .select("*")
         .eq("is_active", True)
         .eq("status", "published")
-        .in_("tier", _visible_tiers(profile))
+        .eq("exam", "pte")
+        .in_("tier", _visible_tiers(profile, "pte"))
     )
 
     if body.question_id:
@@ -63,7 +64,7 @@ def _resolve_question(supabase, body, profile):
     return (res.data, None) if res and res.data else (None, 404)
 
 @router.post("/start")
-async def start_session(body: StartSessionRequest, request: Request, profile=Depends(require_active_plan)):
+async def start_session(body: StartSessionRequest, request: Request, profile=Depends(require_exam_access("pte"))):
     supabase = get_supabase()
     ip = get_client_ip(request)
 
@@ -129,7 +130,7 @@ async def submit_answer(
     body: SubmitAnswerRequest,
     request: Request,
     background_tasks: BackgroundTasks,
-    profile=Depends(require_active_plan),
+    profile=Depends(require_exam_access("pte")),
 ):
     supabase = get_supabase()
     ip = get_client_ip(request)

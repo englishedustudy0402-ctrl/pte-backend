@@ -68,7 +68,7 @@ class TestAuthGating:
                   if isinstance(r, APIRoute) and r.path == "/attempts/" and "POST" in r.methods]
         assert routes, "POST /attempts/ route must exist"
         names = [d.call.__qualname__ for d in routes[0].dependant.dependencies]
-        assert any("require_active_plan" in n for n in names), names
+        assert any("require_exam_access" in n for n in names), names
 
 
 if __name__ == "__main__":
