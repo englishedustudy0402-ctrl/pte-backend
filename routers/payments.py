@@ -38,7 +38,7 @@ async def create_order(body: CreateOrderRequest, request: Request, profile=Depen
     # look broken. A fresh order is always created instead, and the frontend
     # disables its buttons while checkout is actually open.
     supabase.table("subscriptions")\
-        .update({"status": "cancelled"})\
+        .update({"status": "failed"})\
         .eq("user_id", profile["id"])\
         .eq("status", "pending")\
         .execute()
