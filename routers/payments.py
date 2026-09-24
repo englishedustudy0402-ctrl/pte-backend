@@ -5,7 +5,14 @@ import razorpay, os, hmac, hashlib
 from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
-PLAN_PRICE_PAISE = 4900  # ₹49
+
+# Three Pro plans: 1 week, 2 weeks, 1 month (price in paise, duration in days)
+PLANS = {
+    "1w":  {"price_paise": 149900, "days": 7,   "label": "1 Week"},
+    "2w":  {"price_paise": 249900, "days": 14,  "label": "2 Weeks"},
+    "1m":  {"price_paise": 799900, "days": 30,  "label": "1 Month"},
+}
+DEFAULT_PLAN = "1m"
 
 def get_rzp():
     return razorpay.Client(auth=(
@@ -13,11 +20,18 @@ def get_rzp():
         os.getenv("RAZORPAY_KEY_SECRET")
     ))
 
+class CreateOrderRequest(BaseModel):
+    plan: str = DEFAULT_PLAN
+
 @router.post("/create-order")
-async def create_order(request: Request, profile=Depends(get_profile)):
+async def create_order(body: CreateOrderRequest, request: Request, profile=Depends(get_profile)):
     rzp = get_rzp()
     supabase = get_supabase()
     ip = get_client_ip(request)
+
+    plan_key = body.plan if body.plan in PLANS else DEFAULT_PLAN
+    price = PLANS[plan_key]["price_paise"]
+    label = PLANS[plan_key]["label"]
 
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     existing = supabase.table("subscriptions")\
@@ -31,29 +45,29 @@ async def create_order(request: Request, profile=Depends(get_profile)):
         raise HTTPException(status_code=429, detail="Order already pending")
 
     order = rzp.order.create({
-        "amount": PLAN_PRICE_PAISE,
+        "amount": price,
         "currency": "INR",
         "receipt": f"pte_{profile['id'][:8]}_{int(datetime.now().timestamp())}",
-        "notes": {"user_id": profile["id"], "plan": "pro"}
+        "notes": {"user_id": profile["id"], "plan": "pro", "period": plan_key}
     })
 
     supabase.table("subscriptions").insert({
         "user_id": profile["id"],
         "razorpay_order_id": order["id"],
-        "amount_paise": PLAN_PRICE_PAISE,
+        "amount_paise": price,
         "status": "pending",
-        "plan": "pro"
+        "plan": "pro",
     }).execute()
 
-    log_audit(profile["id"], "payment_order", {"order_id": order["id"]}, ip)
+    log_audit(profile["id"], "payment_order", {"order_id": order["id"], "plan": plan_key}, ip)
 
     return {
         "order_id": order["id"],
-        "amount": PLAN_PRICE_PAISE,
+        "amount": price,
         "currency": "INR",
         "key_id": os.getenv("RAZORPAY_KEY_ID"),
         "name": "PTE Platform",
-        "description": "Pro Plan — ₹49/month",
+        "description": f"Pro Plan — {label} (₹{price // 100})",
         "prefill_email": profile["email"],
         "prefill_name": profile["full_name"],
     }
@@ -89,7 +103,9 @@ async def verify_payment(body: VerifyPaymentRequest, request: Request, user=Depe
     if order_rec.data["status"] == "paid":
         return {"message": "Already activated", "plan": "pro"}
 
-    expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    amount = order_rec.data.get("amount_paise") or 799900
+    days = next((p["days"] for p in PLANS.values() if p["price_paise"] == amount), 30)
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
 
     supabase.table("subscriptions").update({
         "razorpay_payment_id": body.razorpay_payment_id,
