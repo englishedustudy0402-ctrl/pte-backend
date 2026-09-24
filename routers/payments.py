@@ -33,16 +33,15 @@ async def create_order(body: CreateOrderRequest, request: Request, profile=Depen
     price = PLANS[plan_key]["price_paise"]
     label = PLANS[plan_key]["label"]
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    existing = supabase.table("subscriptions")\
-        .select("razorpay_order_id")\
+    # Cancel any leftover pending orders: a closed/aborted checkout leaves a
+    # pending order behind, and blocking retries for 10 minutes makes the app
+    # look broken. A fresh order is always created instead, and the frontend
+    # disables its buttons while checkout is actually open.
+    supabase.table("subscriptions")\
+        .update({"status": "cancelled"})\
         .eq("user_id", profile["id"])\
         .eq("status", "pending")\
-        .gte("created_at", cutoff)\
         .execute()
-
-    if existing.data:
-        raise HTTPException(status_code=429, detail="Order already pending")
 
     order = rzp.order.create({
         "amount": price,
