@@ -109,16 +109,15 @@ def _parse_dt(value):
 def has_exam_access(profile, exam: str) -> bool:
     """Whether the profile currently holds live access to a specific exam.
 
-    Admin always passes (owns the platform). An active trial previews all
-    exams. Paid access is per-exam via {exam}_expires_at on profiles.
+    Admin always passes (owns the platform). Paid access is per-exam via
+    {exam}_expires_at on profiles. No free trial bypass: every non-admin
+    account must purchase an exam to unlock its premium bank (condensed free
+    questions stay behind require_exam_access on the routers' free path).
     """
     if (profile.get("email") or "").strip().lower() == ADMIN_EMAIL.strip().lower():
         return True
     if profile.get("is_banned"):
         return False
-    plan = profile.get("plan")
-    if plan == "trial" and _is_trial_active(profile):
-        return True
     col = EXAMS.get(str(exam).lower())
     if not col:
         return False
@@ -147,21 +146,15 @@ def require_exam_access(exam: str):
 
 
 async def require_active_plan(profile=Depends(require_authenticated)):
-    """Legacy all-exams gate: any active trial or pro entitlement. New code
-    should prefer require_exam_access(exam) so a purchase maps to one exam;
-    kept for trial-wide endpoints until they are exam-scoped."""
+    """Legacy all-exams gate: any paid exam entitlement. Admin always passes;
+    trial no longer counts (must purchase). Kept for endpoints until they are
+    exam-scoped."""
     for exam in EXAMS:
         if has_exam_access(profile, exam):
             return profile
-    if profile.get("plan") == "trial" and _is_trial_active(profile):
-        return profile
     if profile.get("plan") == "pro":
         return profile
-    if profile.get("plan") == "trial":
-        # Trial expired: persist the downgrade so the client can't replay it.
-        supabase = get_supabase()
-        supabase.table("profiles").update({"plan": "free"}).eq("id", profile["id"]).execute()
-    raise HTTPException(status_code=402, detail="Subscription required or trial expired")
+    raise HTTPException(status_code=402, detail="Subscription required")
 
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "englishedustudy0402@gmail.com")
